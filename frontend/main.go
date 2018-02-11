@@ -43,15 +43,20 @@ func main() {
 	}
 	log.Hooks.Add(hook)
 
-	http.Handle("/hello", middleware(http.HandlerFunc(handler)))
+	http.Handle("/temperature", middleware(http.HandlerFunc(handler)))
 	http.ListenAndServe(":8080", nil)
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	log := r.Context().Value(contextKey("logger")).(*logrus.Entry)
 
-	log.Info("greeting was sent")
+	location := r.URL.Query().Get("address")
+	if location == "" {
+		http.Error(w, "a non-empty address must be supplied", http.StatusBadRequest)
+		return
+	}
 
+	log.Info(fmt.Sprintf("Query received: %s", location))
 	fmt.Fprintf(w, "hello, world")
 }
 
@@ -75,7 +80,7 @@ func middleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(req.Context(), contextKey("request-id"), id)
 		ctx = context.WithValue(ctx, contextKey("logger"), entry)
 
-		// Set it to the response headers, so we don't have to remember to do that
+		// Set it in the response headers, so we don't have to remember to do that
 		rw.Header().Set("X-Request-Id", id)
 
 		next.ServeHTTP(rw, req.WithContext(ctx))
