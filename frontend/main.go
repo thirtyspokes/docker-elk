@@ -49,11 +49,9 @@ func main() {
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	log := r.Context().Value(contextKey("logger")).(*logrus.Entry)
-	id := r.Context().Value(contextKey("request-id")).(string)
 
 	log.Info("greeting was sent")
 
-	w.Header().Set("X-Transaction-Id", id)
 	fmt.Fprintf(w, "hello, world")
 }
 
@@ -61,7 +59,7 @@ func middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 
 		// Set the request ID, or generate one if needed
-		id := req.Header.Get("X-Request-ID")
+		id := req.Header.Get("X-Request-Id")
 		if id == "" {
 			id = uuid.NewV4().String()
 		}
@@ -76,6 +74,9 @@ func middleware(next http.Handler) http.Handler {
 		// Add the ID and logger to the context
 		ctx := context.WithValue(req.Context(), contextKey("request-id"), id)
 		ctx = context.WithValue(ctx, contextKey("logger"), entry)
+
+		// Set it to the response headers, so we don't have to remember to do that
+		rw.Header().Set("X-Request-Id", id)
 
 		next.ServeHTTP(rw, req.WithContext(ctx))
 
