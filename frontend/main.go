@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"net"
 	"net/http"
 	"time"
@@ -10,6 +10,7 @@ import (
 	"github.com/bshuster-repo/logrus-logstash-hook"
 	"github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
+	"github.com/thirtyspokes/docker-elk/frontend/requests"
 )
 
 var log *logrus.Logger
@@ -43,21 +44,56 @@ func main() {
 	}
 	log.Hooks.Add(hook)
 
-	http.Handle("/temperature", middleware(http.HandlerFunc(handler)))
+	http.Handle("/query", middleware(http.HandlerFunc(handler)))
 	http.ListenAndServe(":8080", nil)
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	log := r.Context().Value(contextKey("logger")).(*logrus.Entry)
+	requestID := r.Context().Value(contextKey("request-id")).(string)
 
+	// Grab the requested street address from the client
 	location := r.URL.Query().Get("address")
 	if location == "" {
 		http.Error(w, "a non-empty address must be supplied", http.StatusBadRequest)
 		return
 	}
 
-	log.Info(fmt.Sprintf("Query received: %s", location))
-	fmt.Fprintf(w, "hello, world")
+	// Send the address to the geolocation service.
+	log.Infof("Sending address for geolocation: %s", location)
+	locationResponse, err := requests.GeolocateAddress(requestID, location)
+	if err != nil {
+		log.Errorf("Failed to retrieve a valid address from location service: %s", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Use the geolocation service's response to query for the temperature.
+	log.Infof("Querying for temperature at %s, %s", locationResponse.Latitude, locationResponse.Longitude)
+	tempResponse, err := requests.GetTemperatureByLocation(requestID, locationResponse.Latitude, locationResponse.Longitude)
+	if err != nil {
+		log.Errorf("Failed to retrieve temperature data from temperature service: %s", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// If all is well, return the request information.
+	response := &queryResponse{
+		Address:        location,
+		Latitude:       locationResponse.Latitude,
+		Longitude:      locationResponse.Longitude,
+		TempCelcius:    tempResponse.TemperatureCelsius,
+		TempFahrenheit: tempResponse.TemperatureFahrenheit,
+	}
+
+	json, err := json.Marshal(response)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Write(json)
+	return
 }
 
 func middleware(next http.Handler) http.Handler {
@@ -83,7 +119,18 @@ func middleware(next http.Handler) http.Handler {
 		// Set it in the response headers, so we don't have to remember to do that
 		rw.Header().Set("X-Request-Id", id)
 
+		// Set our content-type as well
+		rw.Header().Set("Content-Type", "application/json")
+
 		next.ServeHTTP(rw, req.WithContext(ctx))
 
 	})
+}
+
+type queryResponse struct {
+	Address        string  `json:"address"`
+	Latitude       string  `json:"latitude"`
+	Longitude      string  `json:"longitude"`
+	TempCelcius    float64 `json:"temp_celsius"`
+	TempFahrenheit float64 `json:"temp_fahrenheit"`
 }
